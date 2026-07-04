@@ -36,8 +36,12 @@ python tl.py summarize VIDEO_ID
 python tl.py summarize VIDEO_ID --type chapter
 python tl.py summarize VIDEO_ID --type highlight
 
-# ask anything about a specific video
+# ask anything about a specific indexed video
 python tl.py analyze VIDEO_ID "List the key technical claims made, with timestamps"
+
+# Pegasus 1.5: analyze directly with NO indexing (URL up to 2h, or local file <36MB)
+python tl.py quick "Summarize this and list the 3 strongest moments with timestamps" --url https://example.com/video.mp4
+python tl.py quick "Describe the squat form on each rep" --file clip.mp4
 ```
 
 ## Ideas to try

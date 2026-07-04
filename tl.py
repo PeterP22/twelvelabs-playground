@@ -15,9 +15,12 @@ Requires TWELVELABS_API_KEY in your environment or a .env file.
 """
 
 import argparse
+import base64
 import os
 import sys
+import time
 
+import requests
 from dotenv import load_dotenv
 from twelvelabs import TwelveLabs
 from twelvelabs.indexes import IndexesCreateRequestModelsItem
@@ -120,6 +123,52 @@ def cmd_summarize(args):
             print(f"[{hl.start:.0f}s - {hl.end:.0f}s] {hl.highlight}")
 
 
+def cmd_quick(args):
+    """Pegasus 1.5 direct analysis: no indexing, straight from a URL or small local file."""
+    api_key = os.environ.get("TWELVELABS_API_KEY")
+    if not api_key or api_key == "your_api_key_here":
+        sys.exit("Set TWELVELABS_API_KEY in .env (copy .env.example) or your environment.")
+
+    if args.url:
+        video = {"type": "url", "url": args.url}
+    else:
+        if not args.file or not os.path.exists(args.file):
+            sys.exit(f"File not found: {args.file}")
+        size_mb = os.path.getsize(args.file) / 1024 / 1024
+        if size_mb > 36:
+            sys.exit(f"File is {size_mb:.0f}MB; base64 upload is limited to 36MB. "
+                     "Use --url with a hosted copy, or `upload` + `analyze` via an index instead.")
+        with open(args.file, "rb") as f:
+            video = {"type": "base64", "data": base64.b64encode(f.read()).decode()}
+
+    headers = {"x-api-key": api_key, "Content-Type": "application/json"}
+    payload = {
+        "model_name": "pegasus1.5",
+        "video": video,
+        "prompt": args.prompt,
+        "temperature": 0.2,
+    }
+    resp = requests.post("https://api.twelvelabs.io/v1.3/analyze/tasks", json=payload, headers=headers)
+    if resp.status_code >= 400:
+        sys.exit(f"Request failed ({resp.status_code}): {resp.text}")
+    task_id = resp.json().get("_id") or resp.json().get("id")
+    print(f"Analysis task {task_id} created, waiting...")
+
+    while True:
+        time.sleep(10)
+        r = requests.get(f"https://api.twelvelabs.io/v1.3/analyze/tasks/{task_id}", headers=headers)
+        body = r.json()
+        status = body.get("status")
+        print(f"  status: {status}")
+        if status in ("ready", "completed", "done"):
+            data = body.get("data") or body.get("result") or body
+            print()
+            print(data if isinstance(data, str) else __import__("json").dumps(data, indent=2))
+            return
+        if status in ("failed", "error"):
+            sys.exit(f"Analysis failed: {body}")
+
+
 def cmd_analyze(args):
     client = get_client()
     res = client.analyze(video_id=args.video_id, prompt=args.prompt, temperature=0.2)
@@ -157,7 +206,13 @@ def main():
     p.add_argument("--type", choices=["summary", "chapter", "highlight"], default="summary")
     p.set_defaults(func=cmd_summarize)
 
-    p = sub.add_parser("analyze", help="Open-ended prompt over a video (Pegasus)")
+    p = sub.add_parser("quick", help="Pegasus 1.5: analyze a video directly, no indexing")
+    p.add_argument("prompt")
+    p.add_argument("--file", help="Local video file (max 36MB)")
+    p.add_argument("--url", help="Public video URL (up to 2 hours)")
+    p.set_defaults(func=cmd_quick)
+
+    p = sub.add_parser("analyze", help="Open-ended prompt over an indexed video (Pegasus)")
     p.add_argument("video_id")
     p.add_argument("prompt")
     p.set_defaults(func=cmd_analyze)
