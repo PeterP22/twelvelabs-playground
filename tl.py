@@ -77,10 +77,15 @@ def cmd_upload(args):
             task = client.tasks.create(index_id=index_id, video_file=f)
         print(f"Task {task.id} created, indexing (this can take a few minutes)...")
 
-    task.wait_for_done(sleep_interval=10, callback=lambda t: print(f"  status: {t.status}"))
-    if task.status != "ready":
-        sys.exit(f"Indexing failed with status: {task.status}")
-    print(f"Done. Video ID: {task.video_id}")
+    while True:
+        t = client.tasks.retrieve(task_id=task.id)
+        print(f"  status: {t.status}")
+        if t.status == "ready":
+            print(f"Done. Video ID: {t.video_id}")
+            return
+        if t.status == "failed":
+            sys.exit(f"Indexing failed: {t}")
+        time.sleep(10)
 
 
 def cmd_videos(args):
@@ -100,27 +105,34 @@ def cmd_search(args):
         query_text=args.query,
         search_options=["visual", "audio"],
     )
-    found = False
+    found = 0
     for clip in results:
-        found = True
-        print(f"video={clip.video_id}  {clip.start:8.1f}s - {clip.end:8.1f}s  "
-              f"score={clip.score:.2f}  confidence={clip.confidence}")
+        found += 1
+        if found > args.limit:
+            print(f"... more results hidden (use --limit to see more)")
+            break
+        line = f"#{clip.rank}  video={clip.video_id}  {clip.start:7.1f}s - {clip.end:7.1f}s"
+        if clip.transcription:
+            snippet = clip.transcription.strip().replace("\n", " ")
+            line += f'  "{snippet[:80]}"'
+        print(line)
     if not found:
         print("No results.")
 
 
+SUMMARIZE_PROMPTS = {
+    "summary": "Summarize this video in one tight paragraph.",
+    "chapter": ("Break this video into chapters. For each chapter output one line in the format "
+                "[start - end] Title, followed by a one-sentence summary on the next line."),
+    "highlight": ("List the most important or memorable moments of this video, one per line, "
+                  "in the format [start - end] description."),
+}
+
+
 def cmd_summarize(args):
     client = get_client()
-    res = client.summarize(video_id=args.video_id, type=args.type)
-    if args.type == "summary":
-        print(res.summary)
-    elif args.type == "chapter":
-        for ch in res.chapters:
-            print(f"[{ch.start:.0f}s - {ch.end:.0f}s] {ch.chapter_title}")
-            print(f"  {ch.chapter_summary}")
-    else:
-        for hl in res.highlights:
-            print(f"[{hl.start:.0f}s - {hl.end:.0f}s] {hl.highlight}")
+    res = client.analyze(video_id=args.video_id, prompt=SUMMARIZE_PROMPTS[args.type], temperature=0.2)
+    print(res.data)
 
 
 def cmd_quick(args):
@@ -199,6 +211,7 @@ def main():
     p = sub.add_parser("search", help="Semantic search across an index (Marengo)")
     p.add_argument("query")
     p.add_argument("--index-id")
+    p.add_argument("--limit", type=int, default=10, help="Max results to show (default 10)")
     p.set_defaults(func=cmd_search)
 
     p = sub.add_parser("summarize", help="Summary, chapters, or highlights (Pegasus)")
